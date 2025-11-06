@@ -13,6 +13,7 @@ def default_response(message: str, history: List[Dict[any, any]]) -> str:
 with gr.Blocks() as demo:
     chatbot = gr.Chatbot(
         placeholder="¡Hola! Soy tu tutor virtual. Pregúntame lo que quieras.",
+        type="messages"
     )
     gr.ChatInterface(
         fn=default_response,
