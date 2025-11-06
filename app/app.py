@@ -12,23 +12,23 @@ RISK_THRESHOLD = 0.7
 def predict(inputs):
     """Llama al endpoint /predict de la API."""
     try:
-        response = requests.post(f"{API_URL}/predict", json=inputs)
+        response = requests.post(f"{API_URL}/predict", json = inputs)
         data = response.json()
         score = data["score"]
         drivers = data.get("drivers", [])
         return score, drivers
-    except Exception as e:
-        return None, [f"Error al conectar con la API: {e}"]
+    except requests.HTTPError as exc:
+        return None, [f"Error al conectar con la API: {exc}"]
 
 
 def coach(inputs):
     """Llama al endpoint /coach de la API."""
     try:
-        response = requests.post(f"{API_URL}/coach", json=inputs)
+        response = requests.post(f"{API_URL}/coach", json = inputs)
         data = response.json()
         return data["plan"]
-    except Exception as e:
-        return f"Error al conectar con la API: {e}"
+    except requests.HTTPError as exc:
+        return f"Error al conectar con la API: {exc}"
 
 
 def interface_fn(
@@ -36,8 +36,8 @@ def interface_fn(
     sexo: str,
     asignatura: str,
     promedio: str,
-    asistencia,
-    establecimiento
+    asistencia: float,
+    establecimiento: str
 ):
     inputs = {
         "edad": edad,
