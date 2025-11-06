@@ -1,16 +1,19 @@
 """
 Módulo en que se deployea la aplicación de Gradio.
 """
-from typing import List, Dict
+from typing import List, Dict, Any
 import gradio as gr
 
 
-def default_response(message: str, history: List[Dict[any, any]]) -> str:
+def default_response(message: str, history: List[Dict[Any, Any]]) -> str:
     """Testing response."""
     return "Respuesta predeterminada"
 
 
-with gr.Blocks() as demo:
+with gr.Blocks(
+    title="Education Hackathon Duoc",
+    theme=gr.themes.Soft,
+) as demo:
     chatbot = gr.Chatbot(
         placeholder="¡Hola! Soy tu tutor virtual. Pregúntame lo que quieras.",
         type="messages"
