@@ -1,12 +1,13 @@
 from pathlib import Path
+from threading import Thread
 
 valid_columns = ["AGNO","MRUN","NOM_RBD","GEN_ALU","EDAD_ALU","PROM_GRAL","ASISTENCIA","SIT_FIN"]
 
-for dirty_csv_file in Path("in").iterdir():
-    file_path = Path("out", f'{dirty_csv_file.name}')
+def filter_file(file: Path):
+    cf_path = Path("out", f'{file.name}')
 
-    with file_path.open("w", encoding = "UTF-8") as clean_file:
-        with dirty_csv_file.open("r", encoding = "UTF-8-sig") as dirty_file:
+    with cf_path.open("w", encoding = "UTF-8") as clean_file:
+        with file.open("r", encoding = "UTF-8-sig") as dirty_file:
             ### Headers de los CSVs
             column_indexes = []
             for index, label in enumerate(dirty_file.readline().strip().split(";")):
@@ -31,3 +32,13 @@ for dirty_csv_file in Path("in").iterdir():
 
             dirty_file.close()
         clean_file.close()
+
+for dirty_csv_file in Path("in").iterdir():
+    file_path = Path("out", f'{dirty_csv_file.name}')
+    print(f"Filtering file {str(dirty_csv_file.name)}")
+
+    Thread(
+        name = dirty_csv_file.stem,
+        target = filter_file,
+        args = [dirty_csv_file]
+    ).start()
