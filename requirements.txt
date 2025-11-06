@@ -15,7 +15,7 @@
 # Data Science Core
 # ----------------------------------------------------------------------------
 pandas>=2.0.0,<3.0.0           # Manipulación y análisis de datos
-numpy==2.3.4         # Operaciones numéricas y arrays
+numpy==2.2.6         # Operaciones numéricas y arrays
 
 # ----------------------------------------------------------------------------
 # Machine Learning
