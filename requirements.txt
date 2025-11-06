@@ -1,71 +1,76 @@
-aiofiles==24.1.0
-annotated-doc==0.0.3
-annotated-types==0.7.0
-anyio==4.11.0
-audioop-lts==0.2.2
-brotli==1.2.0
-certifi==2025.10.5
-click==8.3.0
-colorama==0.4.6
-dnspython==2.8.0
-email-validator==2.3.0
-fastapi==0.121.0
-fastapi-cli==0.0.14
-fastapi-cloud-cli==0.3.1
-ffmpy==0.6.4
-filelock==3.20.0
-fsspec==2025.10.0
-gradio==5.49.1
-gradio_client==1.13.3
-groovy==0.1.2
-h11==0.16.0
-hf-xet==1.2.0
-httpcore==1.0.9
-httptools==0.7.1
-httpx==0.28.1
-huggingface_hub==1.1.2
-idna==3.11
-itsdangerous==2.2.0
-Jinja2==3.1.6
-markdown-it-py==4.0.0
-MarkupSafe==3.0.3
-mdurl==0.1.2
-numpy==2.3.4
-orjson==3.11.4
-packaging==25.0
-pandas==2.3.3
-pillow==11.3.0
-pydantic==2.11.10
-pydantic-extra-types==2.10.6
-pydantic-settings==2.11.0
-pydantic_core==2.33.2
-pydub==0.25.1
-Pygments==2.19.2
-python-dateutil==2.9.0.post0
-python-dotenv==1.2.1
-python-multipart==0.0.20
-pytz==2025.2
-PyYAML==6.0.3
-rich==14.2.0
-rich-toolkit==0.15.1
-rignore==0.7.6
-ruff==0.14.3
-safehttpx==0.1.7
-semantic-version==2.10.0
-sentry-sdk==2.43.0
-shellingham==1.5.4
-six==1.17.0
-sniffio==1.3.1
-starlette==0.49.3
-tomlkit==0.13.3
-tqdm==4.67.1
-typer==0.20.0
-typer-slim==0.20.0
-typing-inspection==0.4.2
-typing_extensions==4.15.0
-tzdata==2025.2
-ujson==5.11.0
-urllib3==2.5.0
-uvicorn==0.38.0
-watchfiles==1.1.1
-websockets==15.0.1
+# ============================================================================
+# Requirements para Hackathon Salud NHANES - Duoc UC 2025
+# ============================================================================
+# 
+# Instalación:
+#   pip install -r requirements.txt
+# 
+# O en un entorno virtual:
+#   python -m venv venv
+#   source venv/bin/activate  # En Windows: venv\Scripts\activate
+#   pip install -r requirements.txt
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Data Science Core
+# ----------------------------------------------------------------------------
+pandas>=2.0.0,<3.0.0           # Manipulación y análisis de datos
+numpy>=1.24.0,<2.0.0          # Operaciones numéricas y arrays
+
+# ----------------------------------------------------------------------------
+# Machine Learning
+# ----------------------------------------------------------------------------
+scikit-learn>=1.3.0,<2.0.0   # Modelos ML, pipelines, métricas
+xgboost>=2.0.0,<3.0.0         # Modelo de árboles gradient boosting
+lightgbm>=4.0.0,<5.0.0        # Alternativa rápida de gradient boosting
+joblib>=1.3.0,<2.0.0          # Guardar/cargar modelos serializados
+
+# ----------------------------------------------------------------------------
+# Visualización
+# ----------------------------------------------------------------------------
+matplotlib>=3.7.0,<4.0.0     # Gráficos y visualizaciones
+seaborn>=0.12.0,<1.0.0        # Visualizaciones estadísticas avanzadas
+plotly>=5.17.0,<6.0.0         # Gráficos interactivos
+
+# ----------------------------------------------------------------------------
+# Explicabilidad ML
+# ----------------------------------------------------------------------------
+shap>=0.43.0,<1.0.0           # SHAP values para explicabilidad
+
+# ----------------------------------------------------------------------------
+# API y Backend
+# ----------------------------------------------------------------------------
+fastapi>=0.104.0,<1.0.0       # Framework web para API REST
+uvicorn[standard]>=0.24.0,<1.0.0  # Servidor ASGI para FastAPI
+pydantic>=2.4.0,<3.0.0        # Validación de datos y modelos
+python-multipart>=0.0.6       # Soporte para form data en FastAPI
+
+# ----------------------------------------------------------------------------
+# Frontend / App
+# ----------------------------------------------------------------------------
+streamlit>=1.28.0,<2.0.0      # Framework para apps web interactivas
+gradio>=4.0.0,<5.0.0          # Alternativa para apps (opcional)
+
+# ----------------------------------------------------------------------------
+# LLM y NLP
+# ----------------------------------------------------------------------------
+openai>=1.12.0,<2.0.0         # Cliente para OpenAI API
+rank-bm25>=0.2.2,<1.0.0       # Algoritmo BM25 para búsqueda RAG
+
+# ----------------------------------------------------------------------------
+# PDF y Exportación
+# ----------------------------------------------------------------------------
+fpdf>=1.7.2,<2.0.0            # Generación de PDFs
+reportlab>=4.0.0,<5.0.0       # Alternativa para PDFs (más avanzado)
+
+# ----------------------------------------------------------------------------
+# Utilidades
+# ----------------------------------------------------------------------------
+requests>=2.31.0,<3.0.0       # HTTP requests para llamadas a API
+
+# ----------------------------------------------------------------------------
+# Desarrollo y Testing (opcional)
+# ----------------------------------------------------------------------------
+# pytest>=7.4.0                # Framework de testing (descomentar si se usa)
+# black>=23.0.0                # Formateador de código (descomentar si se usa)
+# flake8>=6.0.0                 # Linter de código (descomentar si se usa)
