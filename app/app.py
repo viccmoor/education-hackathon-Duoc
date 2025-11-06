@@ -52,7 +52,7 @@ def interface_fn(
     if score is None:
         return "❌ Error en la predicción.", "", ""
 
-    riesgo = f"{score:.2f} ({"ALTO" if score >= RISK_THRESHOLD else "BAJO"})"
+    riesgo = f"{score:.2f} ({'ALTO' if score >= RISK_THRESHOLD else 'BAJO'})"
     explicacion = "\n".join([f"- {d}" for d in drivers])
 
     if score >= RISK_THRESHOLD:
