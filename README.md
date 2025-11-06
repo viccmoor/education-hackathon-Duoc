@@ -1,3 +1,14 @@
+---
+title: Education Hackathon Duoc
+emoji: 🚀
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+sdk_version: 4.44.1
+app_file: app.py
+pinned: false
+---
+
 # Education Hackathon Duoc
 
 Estimados participantes de Hackaton IA,
@@ -16,16 +27,3 @@ https://datosabiertos.mineduc.cl/rendimiento-por-estudiante-2/
 https://datosabiertos.mineduc.cl/asistencia-anual-por-estudiante/
 
 https://centroestudios.mineduc.cl/wp-content/uploads/sites/100/2022/03/Tasa-Incidencia-Desercion-2010-2020.xlsx
-
-### Gradio Configuration
-
----
-title: Education Hackathon Duoc
-emoji: 🚀
-colorFrom: blue
-colorTo: indigo
-sdk: gradio
-sdk_version: 4.44.1
-app_file: app.py
-pinned: false
----
