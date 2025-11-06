@@ -23,7 +23,7 @@ for dirty_csv_file in Path("data","in").iterdir():
                     for index, label in column_indexes:
                         valid_data.append(data[index])
 
-                    print(";".join(valid_data), file = clean_file)
+                    print(",".join(valid_data), file = clean_file)
                 except (ValueError, IndexError):
                     continue
                 except KeyboardInterrupt:
