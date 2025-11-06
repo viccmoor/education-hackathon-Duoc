@@ -10,7 +10,14 @@ def default_response(message: str, history: List[Dict[any, any]]) -> str:
     return "Respuesta predeterminada"
 
 
-gr.ChatInterface(
-    fn=default_response,
-    type="messages"
-).launch(share=True)
+with gr.Blocks() as demo:
+    chatbot = gr.Chatbot(
+        placeholder="¡Hola! Soy tu tutor virtual. Pregúntame lo que quieras.",
+    )
+    gr.ChatInterface(
+        fn=default_response,
+        type="messages",
+        chatbot=chatbot
+    )
+
+demo.launch(share=True)
