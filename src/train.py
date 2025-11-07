@@ -12,6 +12,7 @@ import numpy as np
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold
 
 from src.load_data import get_clean_data_all_final
 from src.features import create_features
@@ -33,17 +34,20 @@ def _detect_leakage(df: pd.DataFrame) -> list[str]:
 
 def create_target_strict(df: pd.DataFrame) -> pd.Series:
     """
-    Etiqueta SOLO con SIT_FIN_R/SIT_FIN (texto):
-      1 = reprobación/deserción/retirado/elim/baja/abandono, 0 = aprobado/promovido.
-    No usa PROM_GRAL ni ASISTENCIA para evitar que el modelo aprenda una regla determinista.
+    Etiqueta SOLO con SIT_FIN_R/SIT_FIN (texto o códigos).
+      1 = reprobación/deserción/retirado/elim/baja/abandono/R/T/Y
+      0 = aprobado/promovido/P
     """
     y = pd.Series(np.nan, index=df.index, dtype="float")
 
+    aprob_pat = r"(apro|promov|^p$)"
+    reprob_pat = r"(reprob|repit|retir|deser|elim|baja|aband|^r$|^t$|^y$)"
+
     for col in ("SIT_FIN_R", "SIT_FIN"):
         if col in df.columns:
-            s = df[col].astype(str).str.lower().fillna("")
-            aprob = s.str.contains(r"apro|promov") & ~s.str.contains(r"no\s*apro")
-            reprob = s.str.contains(r"reprob|repit|retir|deser|elim|baja|aband")
+            s = df[col].astype("string").str.strip().str.lower()
+            aprob = s.str.contains(aprob_pat, regex=True, na=False)
+            reprob = s.str.contains(reprob_pat, regex=True, na=False)
             y.loc[aprob & y.isna()] = 0
             y.loc[reprob & y.isna()] = 1
 
@@ -79,6 +83,58 @@ def _drop_target_twins(X: pd.DataFrame, y: pd.Series, sample_n: int = 20000) -> 
         X = X.drop(columns=drop_cols)
     return X
 
+
+def _downsample(X, y, max_major=150_000, max_minor=150_000, seed=42):
+    vc = y.value_counts()
+    if len(vc) < 2:
+        return X, y
+    maj = vc.idxmax()
+    min_cls = [c for c in vc.index if c != maj][0]
+    idx_major = y[y == maj].index
+    idx_minor = y[y == min_cls].index
+    if len(idx_major) > max_major:
+        idx_major = idx_major.to_series().sample(n=max_major, random_state=seed).index
+    if len(idx_minor) > max_minor:
+        idx_minor = idx_minor.to_series().sample(n=max_minor, random_state=seed).index
+    keep = idx_major.union(idx_minor)
+    return X.loc[keep], y.loc[keep]
+
+
+def run_cv_kfold(X, y, base_clf, n_splits=5):
+    print(f"\n🔁 K-Fold CV (n={n_splits})")
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    scores = []
+    for i, (tr, va) in enumerate(skf.split(X, y), 1):
+        X_tr, y_tr = _downsample(X.iloc[tr], y.iloc[tr])
+        X_va, y_va = X.iloc[va], y.iloc[va]
+        m = DesercionPredictor(model=base_clf)
+        m.fit(X_tr, y_tr)
+        proba = m.predict_proba(X_va)
+        auc = roc_auc_score(y_va, proba)
+        scores.append(auc)
+        print(f"   Fold {i}: ROC-AUC={auc:.3f} | train={len(X_tr):,} val={len(X_va):,}")
+    print(f"   Promedio ROC-AUC={np.mean(scores):.3f} ± {np.std(scores):.3f}")
+
+def run_cv_temporal(X, y, base_clf, year_col="AGNO"):
+    print("\n⏳ Validación temporal (forward-chaining por año)")
+    years = sorted(pd.to_numeric(X[year_col], errors="coerce").dropna().unique())
+    scores = []
+    for y_end in years[1:]:
+        tr_mask = X[year_col] < y_end
+        va_mask = X[year_col] == y_end
+        if tr_mask.sum() == 0 or va_mask.sum() == 0:
+            continue
+        X_tr, y_tr = _downsample(X[tr_mask], y[tr_mask])
+        X_va, y_va = X[va_mask], y[va_mask]
+        m = DesercionPredictor(model=base_clf)
+        m.fit(X_tr, y_tr)
+        proba = m.predict_proba(X_va)
+        auc = roc_auc_score(y_va, proba)
+        scores.append((int(y_end), auc, len(X_tr), len(X_va)))
+        print(f"   Año {int(y_end)}: ROC-AUC={auc:.3f} | train={len(X_tr):,} val={len(X_va):,}")
+    if scores:
+        aucs = [s[1] for s in scores]
+        print(f"   Promedio ROC-AUC={np.mean(aucs):.3f} ± {np.std(aucs):.3f}")
 
 def train_and_save(use_sample: bool = False, all_final_path: str | None = None):
     
@@ -232,6 +288,17 @@ def train_and_save(use_sample: bool = False, all_final_path: str | None = None):
     model.save(str(model_path))
     print("✅ Modelo guardado")
     print("=" * 60)
+
+    # === Cross‑validation opcional ===
+    if os.getenv("CV", "0") == "1":
+        mode = os.getenv("CV_MODE", "temporal")
+        if mode == "kfold" or "AGNO" not in X_train.columns:
+            run_cv_kfold(X_train.reset_index(drop=True), y_train.reset_index(drop=True), base_clf, n_splits=int(os.getenv("CV_FOLDS", "5")))
+        else:
+            run_cv_temporal(X_train, y_train, base_clf, year_col="AGNO")
+        # Salir si solo quieres CV
+        if os.getenv("CV_ONLY", "0") == "1":
+            return
 
 
 if __name__ == "__main__":
