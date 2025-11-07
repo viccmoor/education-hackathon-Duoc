@@ -32,10 +32,11 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         asist = pd.Series(np.nan, index=df.index)
     
-    # Si está en 0-100, convertir a 0-1
+    # Si está en 0-100, convertir a 0-1 (sin warning)
+    asist = asist.astype(float)  # Forzar dtype antes de modificar
     mask_pct = asist.notna() & (asist > 1.0)
     asist.loc[mask_pct] = asist.loc[mask_pct] / 100.0
-    out["asistencia_pct"] = asist.clip(lower=0.0, upper=1.0).astype(float)
+    out["asistencia_pct"] = asist.clip(lower=0.0, upper=1.0)
     
     # AGNO -> año (convertir a float para sklearn, reemplazando pd.NA con np.nan)
     if "AGNO" in df.columns:
@@ -47,7 +48,6 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         agno = pd.Series(np.nan, index=df.index)
     
-    # Convertir Int64 (nullable) a float64 para evitar pd.NA
     out["AGNO"] = agno.astype(float)
     
     return out
