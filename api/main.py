@@ -7,6 +7,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 import sys
 import os
+import json
 from dotenv import load_dotenv
 
 # Configurar path para importar módulos
@@ -14,18 +15,38 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.model import DesercionPredictor
 from src.features import create_features
+from src.rag import RendimientoRAG
 
 # Cargar variables de entorno
 load_dotenv()
 
-# Variable global para el modelo
+# Variables globales
 MODEL_PATH = Path("models/desercion_predictor.joblib")
+METRICS_PATH = Path("models/metrics.json")
+THRESHOLD_PATH = Path("models/threshold.txt")
+
 model: Optional[DesercionPredictor] = None
+rag: Optional[RendimientoRAG] = None
+THRESHOLD_OVERRIDE: Optional[float] = None
+
+def current_threshold() -> float:
+    """Obtiene el threshold actual (override o desde archivo)."""
+    if THRESHOLD_OVERRIDE is not None:
+        return THRESHOLD_OVERRIDE
+    
+    if THRESHOLD_PATH.exists():
+        try:
+            with open(THRESHOLD_PATH, 'r') as f:
+                return float(f.read().strip())
+        except Exception:
+            pass
+    
+    return 0.5  # Default
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gestiona el ciclo de vida de la aplicación (startup/shutdown)."""
-    global model
+    global model, rag
     
     # Startup
     print("\n" + "="*60)
@@ -43,6 +64,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"❌ Error cargando modelo: {e}")
         model = None
+    
+    # Cargar RAG
+    print("\n🔍 Inicializando sistema RAG...")
+    try:
+        rag = RendimientoRAG(max_rows=50_000)
+    except Exception as e:
+        print(f"⚠️ RAG no disponible: {e}")
+        rag = None
     
     # Verificar OpenAI API Key
     if os.getenv("OPENAI_API_KEY"):
@@ -78,28 +107,13 @@ app.add_middleware(
 
 class StudentData(BaseModel):
     """Datos del estudiante para predicción."""
-    promedio_asistencia: Optional[float] = Field(None, ge=0, le=100, description="Promedio de asistencia (0-100%)")
-    porcentaje_aprobacion: Optional[float] = Field(None, ge=0, le=1, description="Porcentaje de aprobación (0-1)")
-    promedio_notas: Optional[float] = Field(None, ge=1, le=7, description="Promedio de notas (1-7)")
-    tasa_2020: Optional[float] = Field(None, ge=0, le=1, description="Tasa histórica (0-1)")
-    estudiantes_retirados: Optional[int] = Field(None, ge=0, description="Estudiantes retirados en el curso")
-    porcentaje_retiro: Optional[float] = Field(None, ge=0, le=1, description="Porcentaje de retiro (0-1)")
-    total_estudiantes: Optional[int] = Field(None, ge=1, description="Total de estudiantes en el curso")
+    promedio: Optional[float] = Field(None, ge=1, le=7, description="Promedio general (1-7)")
+    asistencia: Optional[float] = Field(None, ge=0, le=100, description="Asistencia (%)")
+    edad: Optional[int] = Field(None, ge=15, le=70, description="Edad del estudiante")
+    sexo: Optional[str] = Field(None, description="Sexo (M/F/Otro)")
+    asignatura: Optional[str] = Field(None, description="Asignatura principal")
+    establecimiento: Optional[str] = Field(None, description="Establecimiento educacional")
     año: Optional[int] = Field(None, ge=2020, le=2030, description="Año académico")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "promedio_asistencia": 75.0,
-                "porcentaje_aprobacion": 0.65,
-                "promedio_notas": 5.0,
-                "tasa_2020": 0.05,
-                "estudiantes_retirados": 15,
-                "porcentaje_retiro": 0.03,
-                "total_estudiantes": 500,
-                "año": 2024
-            }
-        }
 
 class PredictionRequest(BaseModel):
     """Solicitud de predicción."""
@@ -138,17 +152,15 @@ async def root():
             "GET /health": "Estado de la API y modelo",
             "POST /predict": "Predicción de riesgo de deserción",
             "POST /coach": "Coach virtual con LLM (requiere OpenAI API key)",
-            "GET /stats": "Estadísticas del modelo",
-            "GET /docs": "Documentación interactiva Swagger",
-            "GET /redoc": "Documentación ReDoc"
+            "GET /threshold": "Obtener threshold actual",
+            "GET /metrics": "Métricas del modelo",
+            "GET /docs": "Documentación interactiva Swagger"
         }
     }
 
 @app.get("/health")
 async def health():
     """Verifica el estado de la API y el modelo."""
-    openai_configured = bool(os.getenv("OPENAI_API_KEY"))
-    
     return {
         "status": "healthy",
         "model": {
@@ -158,21 +170,14 @@ async def health():
             "features_count": len(model.feature_names) if model else 0
         },
         "services": {
-            "openai_coach": "available" if openai_configured else "not_configured"
+            "openai_coach": "available" if os.getenv("OPENAI_API_KEY") else "not_configured",
+            "rag": "available" if rag and rag.bm25 else "not_available"
         }
     }
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest):
-    """
-    Predice el riesgo de deserción de un estudiante.
-    
-    Retorna:
-    - riesgo_desercion: Probabilidad entre 0 y 1
-    - nivel_riesgo: BAJO (<0.5), MEDIO (0.5-0.8), ALTO (>0.8)
-    - recomendacion: Texto con recomendaciones según el nivel de riesgo
-    - confianza: Nivel de confianza basado en datos disponibles
-    """
+    """Predice el riesgo de deserción de un estudiante."""
     if model is None:
         raise HTTPException(
             status_code=503,
@@ -180,7 +185,7 @@ async def predict(request: PredictionRequest):
         )
     
     try:
-        # Convertir a DataFrame
+        # Convertir a dict
         data_dict = request.payload.dict(exclude_none=True)
         
         if not data_dict:
@@ -190,13 +195,11 @@ async def predict(request: PredictionRequest):
             )
         
         df = pd.DataFrame([data_dict])
-        
-        # Crear features
         X = create_features(df)
         
-        # Calcular confianza basada en datos disponibles
+        # Calcular confianza
         campos_disponibles = len(data_dict)
-        campos_totales = len(StudentData.model_fields)
+        campos_totales = 7  # promedio, asistencia, edad, sexo, asignatura, establecimiento, año
         confianza_pct = campos_disponibles / campos_totales
         
         if confianza_pct > 0.7:
@@ -208,25 +211,10 @@ async def predict(request: PredictionRequest):
         
         # Predecir
         prob = float(model.predict_proba(X)[0])
+        threshold = current_threshold()
         
-        # Clasificar nivel de riesgo
-        if prob < 0.5:
-            nivel = "BAJO"
-            recomendacion = (
-                "✅ El estudiante presenta bajo riesgo de deserción. "
-                "Mantener seguimiento regular y reforzar hábitos positivos de estudio."
-            )
-        elif prob < 0.8:
-            nivel = "MEDIO"
-            recomendacion = (
-                "⚠️ El estudiante presenta riesgo medio de deserción. "
-                "Recomendaciones:\n"
-                "• Reunión con tutor académico para identificar causas\n"
-                "• Plan de mejora en asistencia y/o notas\n"
-                "• Apoyo psicopedagógico si es necesario\n"
-                "• Seguimiento quincenal del progreso"
-            )
-        else:
+        # Clasificar nivel
+        if prob >= threshold:
             nivel = "ALTO"
             recomendacion = (
                 "🚨 ALERTA: Riesgo alto de deserción - Acción inmediata requerida\n\n"
@@ -239,6 +227,22 @@ async def predict(request: PredictionRequest):
                 "6. Considerar opciones de apoyo financiero/becas\n"
                 "7. Vincular con tutorías académicas especializadas"
             )
+        elif prob >= 0.5:
+            nivel = "MEDIO"
+            recomendacion = (
+                "⚠️ Riesgo medio de deserción. "
+                "Recomendaciones:\n"
+                "• Reunión con tutor académico para identificar causas\n"
+                "• Plan de mejora en asistencia y/o notas\n"
+                "• Apoyo psicopedagógico si es necesario\n"
+                "• Seguimiento quincenal del progreso"
+            )
+        else:
+            nivel = "BAJO"
+            recomendacion = (
+                "✅ Bajo riesgo de deserción. "
+                "Mantener seguimiento regular y reforzar hábitos positivos de estudio."
+            )
         
         return PredictionResponse(
             riesgo_desercion=prob,
@@ -247,76 +251,141 @@ async def predict(request: PredictionRequest):
             confianza=confianza
         )
     
-    except HTTPException:
-        raise
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=500, 
-            detail=f"Error en predicción: {str(e)}\nVerifica que los datos estén en el formato correcto."
+            detail=f"Error en predicción: {str(e)}"
         )
+
+def sanitize_for_api(text: str) -> str:
+    """Normaliza texto para evitar errores de encoding."""
+    import unicodedata
+    text = unicodedata.normalize('NFKD', text)
+    text = text.encode('ascii', 'ignore').decode('ascii')
+    return text
 
 @app.post("/coach", response_model=CoachResponse)
 async def coach(request: CoachRequest):
-    """
-    Coach virtual con LLM para estudiantes y docentes.
+    """Coach virtual con LLM."""
+    print(f"🔍 DEBUG /coach - Iniciando request")
     
-    Requiere OPENAI_API_KEY en .env
-    """
-    openai_key = os.getenv("OPENAI_API_KEY")
-    
-    if not openai_key:
+    # Verificar API key
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
         raise HTTPException(
             status_code=503,
             detail="OpenAI API key no configurada. Añade OPENAI_API_KEY al archivo .env"
         )
     
+    print(f"🔍 DEBUG - API key length: {len(api_key)}")
+    print(f"🔍 DEBUG - API key starts with 'sk-': {api_key.startswith('sk-')}")
+    
+    # Verificar que es ASCII puro
+    try:
+        api_key.encode('ascii')
+        print(f"✅ DEBUG - API key es ASCII válido")
+    except UnicodeEncodeError as e:
+        print(f"❌ DEBUG - API key contiene caracteres no-ASCII: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"OpenAI API key tiene caracteres inválidos. Regenerá la key desde platform.openai.com"
+        )
+    
     try:
         from openai import OpenAI
         
-        client = OpenAI(api_key=openai_key)
+        print(f"🔍 DEBUG - Inicializando cliente OpenAI...")
+        client = OpenAI(api_key=api_key)
+        print(f"✅ DEBUG - Cliente OpenAI inicializado")
         
-        # Predecir riesgo si hay datos suficientes y modelo disponible
+        # Predecir riesgo si hay datos
         riesgo = None
         if model and request.student_data:
             try:
+                print(f"🔍 DEBUG - Calculando riesgo con datos: {list(request.student_data.keys())}")
                 df = pd.DataFrame([request.student_data])
                 X = create_features(df)
                 riesgo = float(model.predict_proba(X)[0])
+                print(f"✅ DEBUG - Riesgo calculado: {riesgo:.3f}")
             except Exception as e:
-                print(f"No se pudo calcular riesgo en /coach: {e}")
+                print(f"⚠️ No se pudo calcular riesgo en /coach: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Sanitizar inputs
+        print(f"🔍 DEBUG - Sanitizando question: {request.question[:50]}...")
+        safe_question = sanitize_for_api(request.question)
+        safe_context = sanitize_for_api(request.context or "")
+        
+        # Buscar contexto RAG
+        rag_context = ""
+        if rag and rag.bm25 is not None:
+            try:
+                print(f"🔍 DEBUG - Buscando contexto RAG...")
+                query_parts = [safe_question]
+                if request.student_data.get("promedio"):
+                    query_parts.append(f"promedio {request.student_data['promedio']}")
+                if request.student_data.get("asistencia"):
+                    query_parts.append(f"asistencia {request.student_data['asistencia']}")
+                
+                query = " ".join(query_parts)
+                results = rag.search(query, top_k=3)
+                
+                if results:
+                    formatted = rag.format_context(results)
+                    rag_context = f"\n\nContexto de datos historicos:\n{sanitize_for_api(formatted)}"
+                    print(f"✅ DEBUG - RAG context generado ({len(rag_context)} chars)")
+            except Exception as e:
+                print(f"⚠️ Error en busqueda RAG: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Construir prompt
-        context_str = f"\nContexto adicional: {request.context}" if request.context else ""
+        context_str = f"\nContexto adicional: {safe_context}" if safe_context else ""
         riesgo_str = ""
         if riesgo is not None:
-            nivel = "ALTO" if riesgo > 0.8 else "MEDIO" if riesgo > 0.5 else "BAJO"
-            riesgo_str = f"\n\n🎯 Riesgo de deserción detectado: {riesgo:.1%} ({nivel})"
+            thr = current_threshold()
+            nivel = "ALTO" if riesgo >= thr else "MEDIO" if riesgo >= 0.5 else "BAJO"
+            riesgo_str = f"\n\nRiesgo de desercion detectado: {riesgo:.1%} ({nivel})"
         
-        system_prompt = """Eres un coach académico experto de Duoc UC especializado en prevención de deserción estudiantil.
+        # Sanitizar student_data
+        safe_student_data = {}
+        for k, v in request.student_data.items():
+            if isinstance(v, str):
+                safe_student_data[k] = sanitize_for_api(v)
+            else:
+                safe_student_data[k] = v
+        
+        system_prompt = """Eres un coach academico experto de Duoc UC especializado en prevencion de desercion estudiantil.
 
 Tu rol es:
-1. Brindar apoyo emocional y motivacional con empatía
-2. Sugerir estrategias de estudio y organización concretas
-3. Identificar recursos institucionales disponibles (tutorías, becas, apoyo psicológico)
-4. Ofrecer consejos prácticos y accionables
-5. Detectar señales de riesgo y sugerir intervenciones tempranas
+1. Brindar apoyo emocional y motivacional con empatia
+2. Sugerir estrategias de estudio y organizacion concretas
+3. Identificar recursos institucionales disponibles (tutorias, becas, apoyo psicologico)
+4. Usar datos historicos de estudiantes similares para contextualizar tus recomendaciones
+5. Ofrecer consejos practicos y accionables
 
 Principios:
-- Ser empático y comprensivo
+- Ser empatico y comprensivo
 - Ofrecer soluciones realistas y alcanzables
 - Enfocarte en fortalezas del estudiante
-- Promover autonomía y autorregulación
+- Promover autonomia y autorregulacion
 - Conectar con recursos institucionales cuando sea necesario
+- Citar datos historicos cuando sea relevante
 
-Responde de forma concreta, orientada a la acción y sin tecnicismos innecesarios."""
+Responde de forma concreta, orientada a la accion y sin tecnicismos innecesarios."""
         
-        user_prompt = f"""Pregunta del estudiante/docente: {request.question}
+        user_prompt = f"""Pregunta del estudiante/docente: {safe_question}
 
-Datos del estudiante: {request.student_data}{context_str}{riesgo_str}
+Datos del estudiante: {safe_student_data}{context_str}{riesgo_str}{rag_context}
 
-Por favor, proporciona una respuesta útil, personalizada y empática."""
+Por favor, proporciona una respuesta util, personalizada y empatica."""
         
-        # Llamar a OpenAI
+        print(f"🔍 DEBUG - User prompt length: {len(user_prompt)}")
+        print(f"🔍 DEBUG - Llamando OpenAI API (model: {os.getenv('LLM_MODEL', 'gpt-4o-mini')})...")
+        
         response = client.chat.completions.create(
             model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
             messages=[
@@ -324,9 +393,10 @@ Por favor, proporciona una respuesta útil, personalizada y empática."""
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.7,
-            max_tokens=600
+            max_tokens=800
         )
         
+        print(f"✅ DEBUG - OpenAI API respondió correctamente")
         answer = response.choices[0].message.content
         
         return CoachResponse(
@@ -334,75 +404,55 @@ Por favor, proporciona una respuesta útil, personalizada y empática."""
             riesgo_detectado=riesgo
         )
     
-    except ImportError:
-        raise HTTPException(
-            status_code=500,
-            detail="Librería 'openai' no instalada. Ejecuta: pip install openai"
-        )
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
+        print("\n" + "="*60)
+        print("❌ ERROR COMPLETO EN /coach:")
+        print("="*60)
+        traceback.print_exc()
+        print("="*60 + "\n")
         raise HTTPException(
             status_code=500, 
             detail=f"Error en coaching: {str(e)}"
         )
 
-@app.get("/stats")
-async def stats():
-    """Estadísticas del modelo (requiere modelo cargado)."""
-    if model is None:
-        raise HTTPException(
-            status_code=503, 
-            detail="Modelo no disponible. Ejecuta 'python src/train.py' primero."
-        )
+@app.get("/threshold")
+async def get_threshold():
+    """Obtiene el threshold actual."""
+    return {
+        "threshold": current_threshold(),
+        "description": "Umbral para clasificar riesgo ALTO vs MEDIO"
+    }
+
+@app.post("/threshold")
+async def update_threshold(threshold: float):
+    """Actualiza el threshold dinámicamente."""
+    global THRESHOLD_OVERRIDE
+    if not 0.0 <= threshold <= 1.0:
+        raise HTTPException(status_code=400, detail="Threshold debe estar entre 0.0 y 1.0")
+    THRESHOLD_OVERRIDE = threshold
+    return {
+        "threshold": threshold,
+        "message": f"Threshold actualizado a {threshold:.3f}"
+    }
+
+@app.get("/metrics")
+async def get_metrics():
+    """Obtiene métricas del modelo."""
+    if not METRICS_PATH.exists():
+        return {
+            "roc_auc": 0.0,
+            "f1_opt": 0.0,
+            "precision_opt": 0.0,
+            "recall_opt": 0.0,
+            "threshold_opt": current_threshold()
+        }
     
     try:
-        return {
-            "model_info": {
-                "type": type(model.model).__name__,
-                "features_count": len(model.feature_names),
-                "features": model.feature_names,
-                "has_scaler": model.scaler is not None,
-                "has_imputer": model.imputer is not None
-            },
-            "model_path": str(MODEL_PATH),
-            "model_size_bytes": MODEL_PATH.stat().st_size if MODEL_PATH.exists() else 0
-        }
+        with open(METRICS_PATH, 'r') as f:
+            metrics = json.load(f)
+        return metrics
     except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error obteniendo stats: {str(e)}"
-        )
-
-# Endpoint adicional para demo
-@app.get("/demo")
-async def demo():
-    """Ejemplos de uso de la API."""
-    return {
-        "message": "Ejemplos de uso de la API",
-        "examples": {
-            "predict": {
-                "url": "/predict",
-                "method": "POST",
-                "payload": {
-                    "payload": {
-                        "promedio_asistencia": 70.0,
-                        "porcentaje_aprobacion": 0.60,
-                        "promedio_notas": 4.5,
-                        "tasa_2020": 0.08
-                    }
-                }
-            },
-            "coach": {
-                "url": "/coach",
-                "method": "POST",
-                "payload": {
-                    "student_data": {
-                        "promedio_asistencia": 65.0,
-                        "promedio_notas": 4.2
-                    },
-                    "question": "Me cuesta concentrarme en clases, ¿qué puedo hacer?"
-                }
-            }
-        },
-        "docs_url": "/docs",
-        "redoc_url": "/redoc"
-    }
+        raise HTTPException(status_code=500, detail=f"Error leyendo métricas: {e}")

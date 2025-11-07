@@ -12,7 +12,7 @@ st.set_page_config(
     layout="wide"
 )
 
-API_URL = "http://localhost:8003"
+API_URL = "http://localhost:8000"
 
 # ========== Header ==========
 st.title("📚 Coach Académico Preventivo")
@@ -231,40 +231,68 @@ with tab3:
         st.session_state.chat_history = []
         st.rerun()
     
-    # Ejemplos de preguntas
+    # === PALABRAS CLAVE PARA TEMPLATES ===
     st.markdown("---")
-    st.markdown("**💡 Ejemplos de preguntas:**")
-    col1, col2 = st.columns(2)
+    st.markdown("**💡 Palabras Clave para Consultas Rápidas:**")
+    st.caption("Haz clic en una palabra clave para activar una pregunta predeterminada")
     
-    with col1:
-        if st.button("📚 ¿Cómo organizar mi tiempo de estudio?"):
-            st.session_state.chat_history.append({
-                "role": "user",
-                "content": "¿Cómo organizar mi tiempo de estudio?"
-            })
-            st.rerun()
+    # Diccionario de palabras clave -> prompts
+    KEYWORDS = {
+        # Organización de Estudio
+        "📚 Técnicas de Estudio": f"Soy estudiante de {asignatura} en {establecimiento}. Mi promedio es {promedio} y asisto {asistencia}% de las clases. ¿Qué técnicas de estudio me recomiendas para mejorar mi rendimiento académico?",
+        "📅 Plan de Estudio": f"Necesito organizar mi tiempo de estudio. Tengo promedio {promedio} y asistencia {asistencia}%. ¿Puedes ayudarme a crear un plan de estudio semanal realista?",
+        "📝 Tomar Apuntes": "¿Cuáles son las mejores técnicas para tomar apuntes en clase que me ayuden a retener información?",
         
-        if st.button("📊 Mi promedio es bajo, ¿qué hago?"):
-            st.session_state.chat_history.append({
-                "role": "user",
-                "content": f"Mi promedio es {promedio}, ¿qué estrategias me recomiendas?"
-            })
-            st.rerun()
+        # Rendimiento Académico
+        "📊 Mejorar Promedio": f"Mi promedio actual es {promedio}. ¿Qué estrategias concretas puedo implementar para mejorarlo en las próximas semanas?",
+        "🔄 Recuperar Ramos": f"Estoy atrasado en {asignatura}. ¿Cómo puedo recuperar el ritmo sin afectar mis otras asignaturas?",
+        "✨ Casos de Éxito": f"¿Qué hicieron otros estudiantes con promedio {promedio} y asistencia {asistencia}% que lograron mejorar significativamente?", 
+
+        # Asistencia y Compromiso
+        "📈 Mejorar Asistencia": f"Mi asistencia es {asistencia}%. ¿Qué estrategias puedo usar para asistir más regularmente a clases?",
+        "📄 Justificar Inasistencias": "¿Qué debo hacer cuando tengo inasistencias justificadas? ¿Cómo afecta mi situación académica?",
+        "💪 Motivación Asistencia": "Me cuesta motivarme para ir a clases. ¿Qué consejos me das para mantener el compromiso con mi asistencia?",
+        
+        # Bienestar y Motivación
+        "😌 Manejo de Estrés": "Me siento abrumado con la carga académica. ¿Qué técnicas puedo usar para manejar el estrés?",
+        "🔥 Falta de Motivación": f"Me siento desmotivado con mis estudios en {asignatura}. ¿Cómo puedo recuperar la motivación y el interés?",
+        "🧠 Apoyo Psicológico": "¿Qué recursos de apoyo psicológico hay disponibles en Duoc UC para estudiantes?",
+        "⚖️ Balance Vida-Estudio": "¿Cómo puedo equilibrar mis estudios con mi vida personal y responsabilidades familiares?",
+        
+        # Recursos Institucionales
+        "👨‍🏫 Tutorías": f"¿Qué tutorías académicas están disponibles para {asignatura}? ¿Cómo puedo acceder a ellas?",
+        "💰 Becas": "¿Qué becas o ayudas financieras hay disponibles en Duoc UC? ¿Cómo puedo postular?",
+        "🏥 Bienestar Estudiantil": "¿Qué servicios ofrece Bienestar Estudiantil en Duoc UC y cómo puedo acceder a ellos?",
+        "🎯 Orientación Vocacional": "Tengo dudas sobre si esta carrera es para mí. ¿Hay servicios de orientación vocacional disponibles?",
+        
+        # Estrategias Específicas
+        "📖 Preparación Exámenes": "Tengo un examen importante próximamente. ¿Qué estrategias de preparación me recomiendas?",
+        "👥 Trabajos en Grupo": "¿Cómo puedo organizar trabajos en grupo de manera más efectiva y productiva?",
+        "⏱️ Gestión de Tiempo": "Me cuesta administrar el tiempo durante pruebas y exámenes. ¿Qué técnicas puedo usar?",
+        "📚 Comprensión Lectora": f"En {asignatura} tengo que leer mucho material técnico. ¿Cómo puedo mejorar mi comprensión lectora?"
+    }
     
-    with col2:
-        if st.button("😰 Me siento desmotivado"):
-            st.session_state.chat_history.append({
-                "role": "user",
-                "content": "Me siento desmotivado con mis estudios. ¿Qué puedo hacer?"
-            })
-            st.rerun()
-        
-        if st.button("🎓 ¿Qué recursos hay en Duoc?"):
-            st.session_state.chat_history.append({
-                "role": "user",
-                "content": "¿Qué recursos de apoyo académico y bienestar hay disponibles en Duoc UC?"
-            })
-            st.rerun()
+    # Mostrar botones de palabras clave en grid de 3 columnas
+    keywords_list = list(KEYWORDS.items())
+    for i in range(0, len(keywords_list), 3):
+        cols = st.columns(3)
+        for j in range(3):
+            idx = i + j
+            if idx < len(keywords_list):
+                keyword, prompt = keywords_list[idx]
+                with cols[j]:
+                    if st.button(
+                        keyword,
+                        key=f"keyword_{idx}",
+                        use_container_width=True,
+                        help=f"Clic para preguntar: {prompt[:60]}..."
+                    ):
+                        # Agregar al historial y recargar
+                        st.session_state.chat_history.append({
+                            "role": "user",
+                            "content": prompt
+                        })
+                        st.rerun()
 
 # === PESTAÑA 4: ESTADÍSTICAS ===
 with tab4:
