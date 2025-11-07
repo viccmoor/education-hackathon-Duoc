@@ -160,26 +160,22 @@ async def openai_reload():
 
 class StudentData(BaseModel):
     """Datos del estudiante para predicción."""
-    promedio_asistencia: Optional[float] = Field(None, ge=0, le=100, description="Promedio de asistencia (0-100%)")
-    porcentaje_aprobacion: Optional[float] = Field(None, ge=0, le=1, description="Porcentaje de aprobación (0-1)")
-    promedio_notas: Optional[float] = Field(None, ge=1, le=7, description="Promedio de notas (1-7)")
-    tasa_2020: Optional[float] = Field(None, ge=0, le=1, description="Tasa histórica (0-1)")
-    estudiantes_retirados: Optional[int] = Field(None, ge=0, description="Estudiantes retirados en el curso")
-    porcentaje_retiro: Optional[float] = Field(None, ge=0, le=1, description="Porcentaje de retiro (0-1)")
-    total_estudiantes: Optional[int] = Field(None, ge=1, description="Total de estudiantes en el curso")
-    año: Optional[int] = Field(None, ge=2020, le=2030, description="Año académico")
+    # Features que usa el modelo entrenado
+    AGNO: Optional[int] = Field(None, ge=2020, le=2030, description="Año académico")
+    prom_gral: Optional[float] = Field(None, ge=1.0, le=7.0, description="Promedio general (1-7)")
+    asistencia_pct: Optional[float] = Field(None, ge=0.0, le=1.0, description="Asistencia (0-1, ej: 0.85 = 85%)")
+    
+    # Alias para compatibilidad con nombres alternativos
+    promedio: Optional[float] = Field(None, ge=1.0, le=7.0, description="Alias de prom_gral")
+    asistencia: Optional[float] = Field(None, ge=0.0, le=100.0, description="Asistencia en % (0-100)")
+    año: Optional[int] = Field(None, ge=2020, le=2030, description="Alias de AGNO")
     
     class Config:
         json_schema_extra = {
             "example": {
-                "promedio_asistencia": 75.0,
-                "porcentaje_aprobacion": 0.65,
-                "promedio_notas": 5.0,
-                "tasa_2020": 0.05,
-                "estudiantes_retirados": 15,
-                "porcentaje_retiro": 0.03,
-                "total_estudiantes": 500,
-                "año": 2024
+                "AGNO": 2024,
+                "prom_gral": 5.5,
+                "asistencia_pct": 0.85
             }
         }
 
@@ -251,12 +247,6 @@ async def health():
 async def predict(request: PredictionRequest):
     """
     Predice el riesgo de deserción de un estudiante.
-    
-    Retorna:
-    - riesgo_desercion: Probabilidad entre 0 y 1
-    - nivel_riesgo: BAJO (<0.5), MEDIO (0.5-0.8), ALTO (>0.8)
-    - recomendacion: Texto con recomendaciones según el nivel de riesgo
-    - confianza: Nivel de confianza basado en datos disponibles
     """
     if model is None:
         raise HTTPException(
@@ -265,24 +255,32 @@ async def predict(request: PredictionRequest):
         )
     
     try:
-        # Convertir a DataFrame
+        # Convertir a dict y normalizar campos
         data_dict = request.payload.dict(exclude_none=True)
         
-        if not data_dict:
-            raise HTTPException(
-                status_code=400,
-                detail="Debe proporcionar al menos un campo de datos del estudiante"
-            )
+        # Normalizar alias (promedio -> prom_gral, asistencia -> asistencia_pct, año -> AGNO)
+        if "promedio" in data_dict and "prom_gral" not in data_dict:
+            data_dict["prom_gral"] = data_dict.pop("promedio")
+        if "asistencia" in data_dict and "asistencia_pct" not in data_dict:
+            # Convertir de 0-100 a 0-1
+            data_dict["asistencia_pct"] = data_dict.pop("asistencia") / 100.0
+        if "año" in data_dict and "AGNO" not in data_dict:
+            data_dict["AGNO"] = data_dict.pop("año")
         
         df = pd.DataFrame([data_dict])
         
-        # Crear features
+        # create_features normaliza y crea las columnas que el modelo espera
         X = create_features(df)
         
-        # Calcular confianza basada en datos disponibles
-        campos_disponibles = len(data_dict)
-        campos_totales = len(StudentData.model_fields)
-        confianza_pct = campos_disponibles / campos_totales
+        # Asegurar que todas las features del modelo existan
+        for feat in model.feature_names:
+            if feat not in X.columns:
+                X[feat] = 0.0
+        
+        # Calcular confianza basada en features NO nulas
+        campos_disponibles = (~X[model.feature_names].isna().all()).sum()
+        campos_totales = len(model.feature_names)
+        confianza_pct = campos_disponibles / campos_totales if campos_totales > 0 else 0
         
         if confianza_pct > 0.7:
             confianza = "ALTA"
@@ -294,6 +292,7 @@ async def predict(request: PredictionRequest):
         # Predecir
         prob = float(model.predict_proba(X)[0])
         thr = current_threshold()
+        
         if prob >= thr:
             nivel = "ALTO"
         elif prob >= 0.5:
@@ -301,7 +300,7 @@ async def predict(request: PredictionRequest):
         else:
             nivel = "BAJO"
 
-        # Recomendaciones (opcional: ajustar a nuevo esquema)
+        # Recomendaciones según nivel
         if nivel == "BAJO":
             recomendacion = (
                 "✅ El estudiante presenta bajo riesgo de deserción. "
@@ -309,24 +308,24 @@ async def predict(request: PredictionRequest):
             )
         elif nivel == "MEDIO":
             recomendacion = (
-                "⚠️ El estudiante presenta riesgo medio de deserción. "
+                "⚠️ Riesgo medio de deserción. "
                 "Recomendaciones:\n"
-                "• Reunión con tutor académico para identificar causas\n"
+                "• Reunión con tutor académico\n"
                 "• Plan de mejora en asistencia y/o notas\n"
                 "• Apoyo psicopedagógico si es necesario\n"
-                "• Seguimiento quincenal del progreso"
+                "• Seguimiento quincenal"
             )
         else:  # ALTO
             recomendacion = (
-                "🚨 ALERTA: Riesgo alto de deserción - Acción inmediata requerida\n\n"
-                "Plan de intervención urgente:\n"
-                "1. Entrevista individual con el estudiante (esta semana)\n"
-                "2. Evaluar situación personal/familiar/económica\n"
-                "3. Plan de intervención personalizado con metas claras\n"
+                "🚨 ALERTA: Riesgo alto - Acción inmediata\n\n"
+                "Plan de intervención:\n"
+                "1. Entrevista individual (esta semana)\n"
+                "2. Evaluar situación personal/familiar\n"
+                "3. Plan personalizado con metas claras\n"
                 "4. Seguimiento semanal obligatorio\n"
                 "5. Coordinación con Bienestar Estudiantil\n"
-                "6. Considerar opciones de apoyo financiero/becas\n"
-                "7. Vincular con tutorías académicas especializadas"
+                "6. Apoyo financiero/becas si aplica\n"
+                "7. Tutorías especiales"
             )
         
         return PredictionResponse(
@@ -339,9 +338,11 @@ async def predict(request: PredictionRequest):
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=500, 
-            detail=f"Error en predicción: {str(e)}\nVerifica que los datos estén en el formato correcto."
+            detail=f"Error en predicción: {str(e)}\nFeatures del modelo: {model.feature_names if model else 'N/A'}\nDatos recibidos: {list(request.payload.dict(exclude_none=True).keys())}"
         )
 
 @app.post("/coach", response_model=CoachResponse)
