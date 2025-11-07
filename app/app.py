@@ -12,7 +12,7 @@ st.set_page_config(
     layout="wide"
 )
 
-API_URL = "http://localhost:8501"
+API_URL = "http://localhost:8000"  # <-- cambiar de 8501 a 8000 (puerto FastAPI)
 
 
 # ========== Header ==========
@@ -55,7 +55,12 @@ if evaluar_btn:
     
     with st.spinner("Analizando tu perfil..."):
         try:
-            response = requests.post(f"{API_URL}/predict", json=user_data)
+            # Obtener threshold actual
+            thr_resp = requests.get(f"{API_URL}/threshold", timeout=5)
+            threshold = thr_resp.json().get("threshold", 0.5) if thr_resp.status_code == 200 else 0.5
+
+            # Predicción
+            response = requests.post(f"{API_URL}/predict", json={"payload": user_data})
             
             if response.status_code == 200:
                 result = response.json()
@@ -63,7 +68,7 @@ if evaluar_btn:
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    risk_score = result['score']
+                    risk_score = result['riesgo_desercion']
                     st.metric(
                         "Puntaje de Riesgo",
                         f"{risk_score:.1%}",
@@ -73,28 +78,45 @@ if evaluar_btn:
                 with col2:
                     st.metric(
                         "Nivel de Riesgo",
-                        result['riesgo']
+                        result['nivel_riesgo']
                     )
                 
                 with col3:
-                    if risk_score < 0.3:
-                        color = "🟢"
-                    elif risk_score < 0.6:
+                    # Indicador usa threshold dinámico
+                    if risk_score >= threshold:
+                        color = "🔴"
+                    elif risk_score >= 0.5:
                         color = "🟡"
                     else:
-                        color = "🔴"
+                        color = "🟢"
                     st.metric("Indicador", color)
                 
-                if result['riesgo'] == "Alto":
+                # Mostrar threshold y métricas
+                st.caption(f"Umbral alto: {threshold:.3f}")
+                
+                # Métricas del modelo
+                try:
+                    m = requests.get(f"{API_URL}/metrics", timeout=5)
+                    if m.status_code == 200:
+                        mets = m.json()
+                        st.caption(f"ROC-AUC: {mets.get('roc_auc', 0):.3f} | F1(opt): {mets.get('f1_opt', 0):.3f} | Precision: {mets.get('precision_opt', 0):.3f}")
+                except Exception:
+                    pass
+
+                if result['nivel_riesgo'] == "ALTO":
                     st.error("⚠️ Riesgo alto detectado. Se recomienda derivación a tutor académico.")
+                elif result['nivel_riesgo'] == "MEDIO":
+                    st.warning("⚠️ Riesgo medio. Considera apoyo preventivo.")
                 else:
                     st.success("✅ Riesgo bajo. Mantén tus hábitos actuales.")
                 
-                st.subheader("🎯 Principales Factores de Riesgo")
-                drivers_data = result['drivers']
-                for driver in drivers_data:
-                    st.write(f"- **{driver['feature']}**: {driver['value']:.2f} (importancia: {driver['importance']:.2f})")
+                # Drivers (opcional si /predict los devuelve)
+                if 'drivers' in result:
+                    st.subheader("🎯 Principales Factores de Riesgo")
+                    for driver in result.get('drivers', []):
+                        st.write(f"- **{driver['feature']}**: {driver['value']:.2f} (importancia: {driver['importance']:.2f})")
                 
+                # Coach (si quieres agregar)
                 if st.button("📝 Generar Plan Personalizado"):
                     with st.spinner("Creando tu plan..."):
                         coach_request = {

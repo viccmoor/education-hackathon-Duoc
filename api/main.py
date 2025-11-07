@@ -4,10 +4,12 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 import pandas as pd
 from pathlib import Path
+import os
 from contextlib import asynccontextmanager
 import sys
-import os
 from dotenv import load_dotenv
+from openai import OpenAI
+import json
 
 # Configurar path para importar módulos
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -18,9 +20,55 @@ from src.features import create_features
 # Cargar variables de entorno
 load_dotenv()
 
+# Base absoluta del repo
+BASE_DIR = Path(__file__).parent.parent.resolve()
+
 # Variable global para el modelo
-MODEL_PATH = Path("models/desercion_predictor.joblib")
+MODEL_PATH = BASE_DIR / "models/desercion_predictor.joblib"
 model: Optional[DesercionPredictor] = None
+
+THRESHOLD_PATH = BASE_DIR / "models/threshold.txt"
+METRICS_PATH = BASE_DIR / "models/metrics.json"
+
+_threshold_cache = {"value": 0.5, "mtime": None}
+
+def current_threshold() -> float:
+    try:
+        st = THRESHOLD_PATH.stat()
+        if _threshold_cache["mtime"] != st.st_mtime:
+            _threshold_cache["value"] = float(THRESHOLD_PATH.read_text().strip())
+            _threshold_cache["mtime"] = st.st_mtime
+        return float(_threshold_cache["value"])
+    except Exception:
+        return 0.5
+
+# Modelos Pydantic (ANTES de usar @app)
+class ThresholdUpdate(BaseModel):
+    threshold: float = Field(..., ge=0.0, le=1.0)
+
+openai_client: Optional[OpenAI] = None
+openai_key_cache: Optional[str] = None
+
+def get_openai_client(force: bool = False) -> Optional[OpenAI]:
+    global openai_client, openai_key_cache
+    if force:
+        openai_client = None
+        openai_key_cache = None
+    if openai_client is not None:
+        return openai_client
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        return None
+    if openai_key_cache == key and openai_client is not None:
+        return openai_client
+    try:
+        openai_client = OpenAI(api_key=key)
+        openai_key_cache = key
+        print("✅ OpenAI client inicializado")
+        return openai_client
+    except Exception as e:
+        print(f"⚠️ Error inicializando OpenAI client: {e}")
+        return None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -74,6 +122,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# === ENDPOINTS DE THRESHOLD Y MÉTRICAS (DESPUÉS DE DEFINIR app) ===
+
+@app.get("/threshold")
+async def get_threshold():
+    return {"threshold": current_threshold()}
+
+@app.get("/metrics")
+async def get_metrics():
+    if METRICS_PATH.exists():
+        return json.loads(METRICS_PATH.read_text())
+    return {"detail": "metrics.json no disponible"}
+
+@app.post("/threshold")
+async def set_threshold(req: ThresholdUpdate):
+    val = float(req.threshold)
+    THRESHOLD_PATH.write_text(str(val))
+    _threshold_cache["mtime"] = None
+    return {"status": "updated", "threshold": current_threshold()}
+
+@app.get("/openai/status")
+async def openai_status():
+    return {
+        "has_key": bool(os.getenv("OPENAI_API_KEY")),
+        "cached": openai_client is not None,
+        "threshold": current_threshold()
+    }
+
+@app.post("/openai/reload")
+async def openai_reload():
+    c = get_openai_client(force=True)
+    if c is None:
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY no disponible tras recarga")
+    return {"status": "reloaded"}
+
 # === MODELOS DE DATOS ===
 
 class StudentData(BaseModel):
@@ -123,7 +205,7 @@ class CoachResponse(BaseModel):
     answer: str = Field(..., description="Respuesta del coach virtual")
     riesgo_detectado: Optional[float] = Field(None, description="Riesgo detectado si aplica")
 
-# === ENDPOINTS ===
+# === ENDPOINTS PRINCIPALES ===
 
 @app.get("/")
 async def root():
@@ -139,6 +221,9 @@ async def root():
             "POST /predict": "Predicción de riesgo de deserción",
             "POST /coach": "Coach virtual con LLM (requiere OpenAI API key)",
             "GET /stats": "Estadísticas del modelo",
+            "GET /threshold": "Ver umbral actual",
+            "POST /threshold": "Actualizar umbral",
+            "GET /metrics": "Métricas del modelo",
             "GET /docs": "Documentación interactiva Swagger",
             "GET /redoc": "Documentación ReDoc"
         }
@@ -208,16 +293,21 @@ async def predict(request: PredictionRequest):
         
         # Predecir
         prob = float(model.predict_proba(X)[0])
-        
-        # Clasificar nivel de riesgo
-        if prob < 0.5:
+        thr = current_threshold()
+        if prob >= thr:
+            nivel = "ALTO"
+        elif prob >= 0.5:
+            nivel = "MEDIO"
+        else:
             nivel = "BAJO"
+
+        # Recomendaciones (opcional: ajustar a nuevo esquema)
+        if nivel == "BAJO":
             recomendacion = (
                 "✅ El estudiante presenta bajo riesgo de deserción. "
                 "Mantener seguimiento regular y reforzar hábitos positivos de estudio."
             )
-        elif prob < 0.8:
-            nivel = "MEDIO"
+        elif nivel == "MEDIO":
             recomendacion = (
                 "⚠️ El estudiante presenta riesgo medio de deserción. "
                 "Recomendaciones:\n"
@@ -226,8 +316,7 @@ async def predict(request: PredictionRequest):
                 "• Apoyo psicopedagógico si es necesario\n"
                 "• Seguimiento quincenal del progreso"
             )
-        else:
-            nivel = "ALTO"
+        else:  # ALTO
             recomendacion = (
                 "🚨 ALERTA: Riesgo alto de deserción - Acción inmediata requerida\n\n"
                 "Plan de intervención urgente:\n"
@@ -262,19 +351,14 @@ async def coach(request: CoachRequest):
     
     Requiere OPENAI_API_KEY en .env
     """
-    openai_key = os.getenv("OPENAI_API_KEY")
-    
-    if not openai_key:
+    client = get_openai_client()
+    if client is None:
         raise HTTPException(
             status_code=503,
             detail="OpenAI API key no configurada. Añade OPENAI_API_KEY al archivo .env"
         )
-    
+
     try:
-        from openai import OpenAI
-        
-        client = OpenAI(api_key=openai_key)
-        
         # Predecir riesgo si hay datos suficientes y modelo disponible
         riesgo = None
         if model and request.student_data:
@@ -284,14 +368,15 @@ async def coach(request: CoachRequest):
                 riesgo = float(model.predict_proba(X)[0])
             except Exception as e:
                 print(f"No se pudo calcular riesgo en /coach: {e}")
-        
+
         # Construir prompt
         context_str = f"\nContexto adicional: {request.context}" if request.context else ""
         riesgo_str = ""
         if riesgo is not None:
-            nivel = "ALTO" if riesgo > 0.8 else "MEDIO" if riesgo > 0.5 else "BAJO"
+            thr = current_threshold()
+            nivel = "ALTO" if riesgo >= thr else "MEDIO" if riesgo >= 0.5 else "BAJO"
             riesgo_str = f"\n\n🎯 Riesgo de deserción detectado: {riesgo:.1%} ({nivel})"
-        
+
         system_prompt = """Eres un coach académico experto de Duoc UC especializado en prevención de deserción estudiantil.
 
 Tu rol es:
@@ -316,7 +401,6 @@ Datos del estudiante: {request.student_data}{context_str}{riesgo_str}
 
 Por favor, proporciona una respuesta útil, personalizada y empática."""
         
-        # Llamar a OpenAI
         response = client.chat.completions.create(
             model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
             messages=[

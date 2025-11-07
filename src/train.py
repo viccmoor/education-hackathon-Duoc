@@ -3,6 +3,7 @@ from pathlib import Path
 import time
 import model
 import os 
+import json   # <-- agrega esto
 
 # Asegura imports del paquete src cuando se ejecuta como script
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -10,7 +11,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pandas as pd
 import numpy as np
 from sklearn.inspection import permutation_importance
-from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix
+from sklearn.metrics import (
+    roc_auc_score,
+    classification_report,
+    precision_recall_curve,
+    precision_score,
+    recall_score,
+    confusion_matrix as sk_confusion_matrix,  # <- evita sombra
+)
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold
 
@@ -40,13 +48,13 @@ def create_target_strict(df: pd.DataFrame) -> pd.Series:
     """
     y = pd.Series(np.nan, index=df.index, dtype="float")
 
-    aprob_pat = r"(apro|promov|^p$)"
-    reprob_pat = r"(reprob|repit|retir|deser|elim|baja|aband|^r$|^t$|^y$)"
+    aprob_pat = r"(?:apro|promov|^p$)"
+    reprob_pat = r"(?:reprob|repit|retir|deser|elim|baja|aband|^r$|^t$|^y$)"
 
     for col in ("SIT_FIN_R", "SIT_FIN"):
         if col in df.columns:
             s = df[col].astype("string").str.strip().str.lower()
-            aprob = s.str.contains(aprob_pat, regex=True, na=False)
+            aprob = s.str.contains(aprob_pat, regex=True, na=False) 
             reprob = s.str.contains(reprob_pat, regex=True, na=False)
             y.loc[aprob & y.isna()] = 0
             y.loc[reprob & y.isna()] = 1
@@ -269,15 +277,47 @@ def train_and_save(use_sample: bool = False, all_final_path: str | None = None):
     # Evaluación
     if len(X_test) > 0:
         print("\n📈 Evaluando en test set...")
-        y_pred = model.predict(X_test)
         y_proba = model.predict_proba(X_test)
+        y_pred_05 = (y_proba >= 0.5).astype(int)
+
         try:
-            report = classification_report(y_test, y_pred, target_names=["Riesgo Bajo", "Riesgo Alto"])
-            cm = confusion_matrix(y_test, y_pred)
+            report = classification_report(y_test, y_pred_05, target_names=["Riesgo Bajo", "Riesgo Alto"])
+            cm_05 = sk_confusion_matrix(y_test, y_pred_05)
             roc = roc_auc_score(y_test, y_proba)
             print(f"\n{report}")
             print(f"ROC-AUC: {roc:.3f}")
-            print(f"Confusion Matrix:\n{cm}")
+            print(f"Confusion Matrix:\n{cm_05}")
+
+            # Threshold óptimo por F1
+            prec, rec, thr = precision_recall_curve(y_test, y_proba)
+            f1 = (2 * prec * rec) / (prec + rec + 1e-12)
+            best_idx = int(np.nanargmax(f1))
+            best_thr = float(thr[best_idx]) if best_idx < len(thr) else 0.5
+            print(f"   Threshold óptimo (F1): {best_thr:.3f}")
+
+            # Métricas @best_thr
+            y_pred_best = (y_proba >= best_thr).astype(int)
+            cm_best = sk_confusion_matrix(y_test, y_pred_best)
+            prec_best = precision_score(y_test, y_pred_best)
+            rec_best = recall_score(y_test, y_pred_best)
+            f1_best = (2 * prec_best * rec_best) / (prec_best + rec_best + 1e-12)
+            print(f"\n🔧 Métricas @umbral óptimo {best_thr:.3f}")
+            print(f"   Precision: {prec_best:.3f} | Recall: {rec_best:.3f} | F1: {f1_best:.3f}")
+            print(f"   CM óptimo:\n{cm_best}")
+
+            # Guardar threshold y metrics
+            Path('models').mkdir(exist_ok=True)
+            with open('models/threshold.txt', 'w') as f:
+                f.write(str(best_thr))
+            with open("models/metrics.json","w") as f:
+                json.dump({
+                    "roc_auc": float(roc),
+                    "threshold_opt": best_thr,
+                    "precision_opt": float(prec_best),
+                    "recall_opt": float(rec_best),
+                    "f1_opt": float(f1_best),
+                    "cm_opt": cm_best.tolist()
+                }, f, indent=2)
         except Exception as e:
             print(f"⚠️  Error métricas: {e}")
 
