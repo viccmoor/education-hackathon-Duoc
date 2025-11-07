@@ -176,3 +176,43 @@ def get_clean_data(
         print(f"   Años: {dict(years)}")
     
     return data
+
+def get_clean_data_all_final(path: str | Path = None, sample_frac: float | None = None, random_state: int = 42) -> pd.DataFrame:
+    """
+    Carga exclusivamente datasets/csvClear/Rendimiento_all_final.csv (o csvClear/Rendimiento_all_final.csv).
+    Normaliza tipos y valores clave para compatibilidad con features/targets.
+    """
+    candidates = [
+        Path(path) if path else None,
+        Path("datasets/csvClear/Rendimiento_all_final.csv"),
+        Path("csvClear/Rendimiento_all_final.csv"),
+    ]
+    csv_path = next((p for p in candidates if p and p.exists()), None)
+    if csv_path is None:
+        raise FileNotFoundError(
+            "No se encontró Rendimiento_all_final.csv en datasets/csvClear o csvClear. "
+            "Indica path explícito con get_clean_data_all_final(path=...)."
+        )
+
+    df = pd.read_csv(csv_path)
+    df.columns = [str(c).strip().upper().lstrip("\ufeff") for c in df.columns]
+
+    # Tipos base
+    if "AGNO" in df.columns:
+        df["AGNO"] = pd.to_numeric(df["AGNO"], errors="coerce").astype("Int64")
+    if "PROM_GRAL" in df.columns:
+        df["PROM_GRAL"] = pd.to_numeric(df["PROM_GRAL"], errors="coerce")
+    if "ASISTENCIA" in df.columns:
+        df["ASISTENCIA"] = pd.to_numeric(df["ASISTENCIA"], errors="coerce")
+        mask_01 = df["ASISTENCIA"].between(0, 1, inclusive="both")
+        df.loc[mask_01, "ASISTENCIA"] = df.loc[mask_01, "ASISTENCIA"] * 100
+        df["ASISTENCIA"] = df["ASISTENCIA"].clip(lower=0, upper=100)
+
+    if "MRUN" in df.columns:
+        df["MRUN"] = df["MRUN"].astype(str).str.strip()
+        df = df[df["MRUN"].notna() & (df["MRUN"].str.len() > 0)]
+
+    if sample_frac and 0 < sample_frac < 1:
+        df = df.sample(frac=sample_frac, random_state=random_state).reset_index(drop=True)
+
+    return df
