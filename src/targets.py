@@ -46,27 +46,43 @@ def load_rendimiento_clean(data_dir: str = "datasets/csvClear") -> pd.DataFrame:
     return full
 
 def build_label_aprobacion(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    y = pd.Series(np.nan, index=df.index, dtype="float")
+    """
+    Etiqueta binaria de aprobación:
+      - Usa primero SIT_FIN_R, luego SIT_FIN (sin copiar df)
+      - Fallback por nota PROM_GRAL (>= 4.0 => 1, < 4.0 => 0)
+    Más eficiente en memoria/tiempo para ~millones de filas.
+    """
+    n = len(df)
+    y = np.full(n, np.nan, dtype=np.float32)
 
-    # Preferir SIT_FIN_R
-    s = df["SIT_FIN_R"].fillna("").str.lower()
-    aprob = s.str.contains(r"apro|promov") & ~s.str.contains(r"no\s*apro")
-    reprob = s.str.contains(r"reprob|repit|retir|deser|elim|baja|aband")
-    y.loc[aprob] = 1
-    y.loc[reprob] = 0
+    # Patrones (sin lower() ni fillna, usar na=False)
+    aprob_pat = r"(apro|promov|^p$)"
+    reprob_pat = r"(reprob|repit|retir|deser|elim|baja|aband)"
 
-    # Fallback SIT_FIN
-    s2 = df["SIT_FIN"].fillna("").str.lower()
-    aprob2 = s2.str.contains(r"apro|promov") & ~s2.str.contains(r"no\s*apro")
-    reprob2 = s2.str.contains(r"reprob|repit|retir|deser|elim|baja|aband")
-    y.loc[y.isna() & aprob2] = 1
-    y.loc[y.isna() & reprob2] = 0
+    # 1) Preferir SIT_FIN_R
+    s_r = df.get("SIT_FIN_R")
+    if s_r is not None:
+        aprob = s_r.astype("string").str.contains(aprob_pat, regex=True, case=False, na=False).to_numpy()
+        reprob = s_r.astype("string").str.contains(reprob_pat, regex=True, case=False, na=False).to_numpy()
+        y[aprob] = 1
+        y[reprob] = 0
 
-    # Regla por nota
-    nota = pd.to_numeric(df["PROM_GRAL"], errors="coerce")
-    y.loc[y.isna() & (nota >= 4.0)] = 1
-    y.loc[y.isna() & (nota < 4.0)] = 0
+    # 2) Fallback SIT_FIN
+    s = df.get("SIT_FIN")
+    if s is not None:
+        aprob2 = s.astype("string").str.contains(aprob_pat, regex=True, case=False, na=False).to_numpy()
+        reprob2 = s.astype("string").str.contains(reprob_pat, regex=True, case=False, na=False).to_numpy()
+        na_mask = np.isnan(y)
+        y[na_mask & aprob2] = 1
+        y[na_mask & reprob2] = 0
 
-    df["label_aprobado"] = y.astype("Int64")
+    # 3) Fallback por nota
+    nota = pd.to_numeric(df.get("PROM_GRAL"), errors="coerce").to_numpy()
+    na_mask = np.isnan(y)
+    y[na_mask & (nota >= 4.0)] = 1
+    y[na_mask & (nota < 4.0)] = 0
+
+    # Escribir en df (tipo compacto)
+    df["label_aprobado"] = pd.Series(y, index=df.index).astype("Int8")
     return df
+

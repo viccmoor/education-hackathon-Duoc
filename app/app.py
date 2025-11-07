@@ -1,110 +1,129 @@
 """
-Módulo en que se deployea la aplicación de Gradio.
+App Streamlit para predicción de riesgo académico y coaching personalizado.
 """
+import streamlit as st
 import requests
-import gradio as gr
+import json
 
+# Configuración
+st.set_page_config(
+    page_title="Coach Académico Duoc",
+    page_icon="📚",
+    layout="wide"
+)
 
-API_URL = "https://tu-api.onrender.com"
-RISK_THRESHOLD = 0.7
+API_URL = "http://localhost:8000"
 
+# ========== Header ==========
+st.title("📚 Coach Académico Preventivo")
+st.markdown("""
+Este sistema estima tu riesgo de reprobación y genera un plan personalizado.
 
-def predict(inputs):
-    """Llama al endpoint /predict de la API."""
-    try:
-        response = requests.post(f"{API_URL}/predict", json = inputs)
-        data = response.json()
-        score = data["score"]
-        drivers = data.get("drivers", [])
-        return score, drivers
-    except requests.HTTPError as exc:
-        return None, [f"Error al conectar con la API: {exc}"]
+**⚠️ DISCLAIMER:** Este NO es un diagnóstico académico oficial. Consulta con tu tutor.
+""")
 
+# ========== Sidebar (Formulario) ==========
+with st.sidebar:
+    st.header("📋 Tu Perfil Académico")
+    
+    # Datos académicos
+    st.subheader("Rendimiento")
+    promedio = st.number_input("Promedio General", min_value=1.0, max_value=7.0, value=5.5, step=0.1)
+    asistencia = st.slider("Asistencia (%)", 0, 100, 85)
+    
+    # Datos demográficos (opcionales)
+    st.subheader("Información Adicional (Opcional)")
+    edad = st.number_input("Edad", min_value=15, max_value=70, value=20)
+    sexo = st.selectbox("Sexo", ["M", "F", "Otro"])
+    asignatura = st.text_input("Asignatura principal", "Programación")
+    establecimiento = st.text_input("Establecimiento", "Duoc UC Sede Maipú")
+    
+    # Botón de evaluación
+    evaluar_btn = st.button("🔍 Evaluar Riesgo", type="primary")
 
-def coach(inputs):
-    """Llama al endpoint /coach de la API."""
-    try:
-        response = requests.post(f"{API_URL}/coach", json = inputs)
-        data = response.json()
-        return data["plan"]
-    except requests.HTTPError as exc:
-        return f"Error al conectar con la API: {exc}"
-
-
-def interface_fn(
-    edad: int,
-    sexo: str,
-    asignatura: str,
-    promedio: str,
-    asistencia: float,
-    establecimiento: str
-):
-    inputs = {
+# ========== Main Area ==========
+if evaluar_btn:
+    user_data = {
+        "promedio": promedio,
+        "asistencia": asistencia,
         "edad": edad,
         "sexo": sexo,
         "asignatura": asignatura,
-        "promedio": promedio,
-        "asistencia": asistencia,
-        "establecimiento": establecimiento,
+        "establecimiento": establecimiento
     }
+    
+    with st.spinner("Analizando tu perfil..."):
+        try:
+            response = requests.post(f"{API_URL}/predict", json=user_data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    risk_score = result['score']
+                    st.metric(
+                        "Puntaje de Riesgo",
+                        f"{risk_score:.1%}",
+                        delta=None
+                    )
+                
+                with col2:
+                    st.metric(
+                        "Nivel de Riesgo",
+                        result['riesgo']
+                    )
+                
+                with col3:
+                    if risk_score < 0.3:
+                        color = "🟢"
+                    elif risk_score < 0.6:
+                        color = "🟡"
+                    else:
+                        color = "🔴"
+                    st.metric("Indicador", color)
+                
+                if result['riesgo'] == "Alto":
+                    st.error("⚠️ Riesgo alto detectado. Se recomienda derivación a tutor académico.")
+                else:
+                    st.success("✅ Riesgo bajo. Mantén tus hábitos actuales.")
+                
+                st.subheader("🎯 Principales Factores de Riesgo")
+                drivers_data = result['drivers']
+                for driver in drivers_data:
+                    st.write(f"- **{driver['feature']}**: {driver['value']:.2f} (importancia: {driver['importance']:.2f})")
+                
+                if st.button("📝 Generar Plan Personalizado"):
+                    with st.spinner("Creando tu plan..."):
+                        coach_request = {
+                            "user_profile": user_data,
+                            "risk_score": risk_score,
+                            "top_drivers": [d['feature'] for d in drivers_data]
+                        }
+                        
+                        coach_response = requests.post(f"{API_URL}/coach", json=coach_request)
+                        
+                        if coach_response.status_code == 200:
+                            plan_data = coach_response.json()
+                            
+                            st.subheader("📋 Tu Plan de Éxito Académico")
+                            st.markdown(plan_data['plan'])
+                            
+                            if plan_data['sources']:
+                                st.caption(f"📚 Fuentes: {', '.join(plan_data['sources'])}")
+                        else:
+                            st.error(f"Error generando plan: {coach_response.status_code}")
+            else:
+                st.error(f"Error en predicción: {response.status_code}")
+                
+        except Exception as e:
+            st.error(f"Error conectando con la API: {e}")
+            st.info("Asegúrate de que la API esté corriendo en http://localhost:8000")
 
-    score, drivers = predict(inputs)
-    if score is None:
-        return "❌ Error en la predicción.", "", ""
-
-    riesgo = f"{score:.2f} ({'ALTO' if score >= RISK_THRESHOLD else 'BAJO'})"
-    explicacion = "\n".join([f"- {d}" for d in drivers])
-
-    if score >= RISK_THRESHOLD:
-        derivacion = (
-            "⚠️ Riesgo alto detectado. Se recomienda derivar al tutor académico."
-        )
-    else:
-        derivacion = "✅ Riesgo bajo. Mantén los hábitos actuales."
-
-    plan = coach(inputs)
-    return riesgo, explicacion, f"{derivacion}\n\n{plan}"
-
-
-with gr.Blocks(
-    title="Education Hackathon Duoc",
-    theme=gr.themes.Soft(primary_hue="blue"),
-) as demo:
-    gr.Markdown(
-        """
-        # Tutor Virtual Adaptativo
-        _Estimación de riesgo de deserción y plan personalizado._
-
-        **Aviso:** Este sistema no reemplaza la orientación profesional.
-        Los resultados son estimaciones generadas por un modelo de IA
-        educativo.
-        """
-    )
-
-    with gr.Row():
-        with gr.Column(scale=1):
-            edad = gr.Slider(5, 20, value=18, step=1, label="Edad")
-            sexo = gr.Dropdown(["Masculino", "Femenino", "Otro"], label="Sexo")
-            asignatura = gr.Textbox(label="Asignatura principal")
-            promedio = gr.Number(
-                label="Promedio general (0-7)",
-                value=5.5, minimum=1, maximum=7,
-                step=0.01
-            )
-            asistencia = gr.Slider(0, 100, value=85, step=1, label="Asistencia (%)")
-            establecimiento = gr.Textbox(label="Establecimiento")
-
-            btn = gr.Button("📊 Estimar riesgo y generar plan")
-
-        with gr.Column(scale=2):
-            riesgo = gr.Textbox(label="Nivel de Riesgo", interactive=False)
-            explicacion = gr.Textbox(label="Variables más influyentes", lines=4, interactive=False)
-            plan = gr.Textbox(label="Plan de acción personalizado", lines=6, interactive=False)
-
-    btn.click(
-        interface_fn,
-        inputs=[edad, sexo, asignatura, promedio, asistencia, establecimiento],
-        outputs=[riesgo, explicacion, plan],
-    )
-
-demo.launch(share=True)
+st.markdown("---")
+st.caption("""
+Desarrollado para Hackathon IA Duoc UC 2025 | 
+Basado en datos de rendimiento académico | 
+⚠️ No sustituye orientación académica profesional
+""")
