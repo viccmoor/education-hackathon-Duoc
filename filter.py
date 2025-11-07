@@ -14,7 +14,7 @@ def filter_file(file: Path):
                 if label in valid_columns:
                     column_indexes.append((index, label.strip()))
 
-            print(",".join(valid_columns), file = clean_file)
+            print(";".join(valid_columns), file = clean_file)
 
             for line in dirty_file:
                 data = line.strip().split(";")
@@ -24,7 +24,7 @@ def filter_file(file: Path):
                     for index, label in column_indexes:
                         valid_data.append(data[index])
 
-                    print(",".join(valid_data), file = clean_file)
+                    print(";".join(valid_data), file = clean_file)
                 except (ValueError, IndexError):
                     continue
                 except KeyboardInterrupt:
