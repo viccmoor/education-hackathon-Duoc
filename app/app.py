@@ -12,7 +12,7 @@ st.set_page_config(
     layout="wide"
 )
 
-API_URL = "http://localhost:8501"
+API_URL = "http://localhost:8000"
 
 
 # ========== Header ==========
@@ -45,17 +45,19 @@ with st.sidebar:
 # ========== Main Area ==========
 if evaluar_btn:
     user_data = {
-        "promedio": promedio,
-        "asistencia": asistencia,
-        "edad": edad,
-        "sexo": sexo,
-        "asignatura": asignatura,
-        "establecimiento": establecimiento
+        "payload": {
+            "promedio": promedio,
+            "asistencia": asistencia,
+            "edad": edad,
+            "sexo": sexo,
+            "asignatura": asignatura,
+            "establecimiento": establecimiento
+        }
     }
     
     with st.spinner("Analizando tu perfil..."):
         try:
-            response = requests.post(f"{API_URL}/predict", json=user_data)
+            response = requests.post(f"{API_URL}/predict", json=user_data, timeout=None)
             
             if response.status_code == 200:
                 result = response.json()
@@ -63,7 +65,7 @@ if evaluar_btn:
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    risk_score = result['score']
+                    risk_score = result['riesgo_desercion']
                     st.metric(
                         "Puntaje de Riesgo",
                         f"{risk_score:.1%}",
@@ -73,7 +75,7 @@ if evaluar_btn:
                 with col2:
                     st.metric(
                         "Nivel de Riesgo",
-                        result['riesgo']
+                        result['nivel_riesgo']
                     )
                 
                 with col3:
@@ -85,7 +87,7 @@ if evaluar_btn:
                         color = "🔴"
                     st.metric("Indicador", color)
                 
-                if result['riesgo'] == "Alto":
+                if result['nivel_riesgo'] == "ALTO":
                     st.error("⚠️ Riesgo alto detectado. Se recomienda derivación a tutor académico.")
                 else:
                     st.success("✅ Riesgo bajo. Mantén tus hábitos actuales.")
@@ -118,9 +120,15 @@ if evaluar_btn:
             else:
                 st.error(f"Error en predicción: {response.status_code}")
                 
+                try:
+                    print(response.json())
+                except:
+                    print(response.text)
+
         except Exception as e:
             st.error(f"Error conectando con la API: {e}")
             st.info("Asegúrate de que la API esté corriendo en http://localhost:8000")
+            st.info(f"{result}")
 
 st.markdown("---")
 st.caption("""

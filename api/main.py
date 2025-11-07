@@ -19,7 +19,7 @@ from src.features import create_features
 load_dotenv()
 
 # Variable global para el modelo
-MODEL_PATH = Path("models/desercion_predictor.joblib")
+MODEL_PATH = os.path.join("..", "models", "desercion_predictor.joblib")
 model: Optional[DesercionPredictor] = None
 
 @asynccontextmanager
@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI):
     print("="*60)
     
     try:
-        if MODEL_PATH.exists():
+        if os.path.exists(MODEL_PATH):
             model = DesercionPredictor.load(str(MODEL_PATH))
             print(f"✅ Modelo cargado desde {MODEL_PATH}")
             print(f"   Features: {len(model.feature_names)}")
@@ -101,9 +101,30 @@ class StudentData(BaseModel):
             }
         }
 
+class StudentPayload(BaseModel):
+    """Datos del estudiante para predicción."""
+    promedio: float = Field(..., ge=1, le=7, description="Promedio de notas (1-7)")
+    asistencia: float = Field(..., ge=0, le=100, description="Porcentaje de asistencia (0-100%)")
+    edad: int = Field(..., ge=10, le=100, description="Edad del estudiante")
+    sexo: str = Field(..., description="Sexo del estudiante (M/F u otro)")
+    asignatura: str = Field(..., description="Nombre de la asignatura")
+    establecimiento: str = Field(..., description="Nombre del establecimiento educativo")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "promedio": 5.5,
+                "asistencia": 85,
+                "edad": 20,
+                "sexo": "M",
+                "asignatura": "Programación",
+                "establecimiento": "Duoc UC Sede Maipú"
+            }
+        }
+
 class PredictionRequest(BaseModel):
     """Solicitud de predicción."""
-    payload: StudentData
+    payload: StudentPayload
 
 class PredictionResponse(BaseModel):
     """Respuesta de predicción."""
@@ -111,6 +132,9 @@ class PredictionResponse(BaseModel):
     nivel_riesgo: str = Field(..., description="BAJO, MEDIO o ALTO")
     recomendacion: str = Field(..., description="Recomendación textual")
     confianza: str = Field(..., description="Nivel de confianza de la predicción")
+    drivers: list[dict] = Field(
+        ..., description="Factores que influyen en la predicción: feature, value e importancia"
+    )
 
 class CoachRequest(BaseModel):
     """Solicitud de coaching con LLM."""
@@ -239,12 +263,25 @@ async def predict(request: PredictionRequest):
                 "6. Considerar opciones de apoyo financiero/becas\n"
                 "7. Vincular con tutorías académicas especializadas"
             )
-        
+
+        drivers = []
+        for col in X.columns:
+            val = X[col].iloc[0]
+            importance = abs(val - X[col].mean())
+            drivers.append({
+                "feature": str(col),
+                "value": float(val),
+                "importance": float(importance)
+            })
+
+        drivers = sorted(drivers, key=lambda x: x["importance"], reverse=True)[:5]
+
         return PredictionResponse(
             riesgo_desercion=prob,
             nivel_riesgo=nivel,
             recomendacion=recomendacion,
-            confianza=confianza
+            confianza=confianza,
+            drivers=drivers
         )
     
     except HTTPException:
